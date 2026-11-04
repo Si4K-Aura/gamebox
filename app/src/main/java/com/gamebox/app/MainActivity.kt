@@ -1,10 +1,17 @@
 package com.gamebox.app
 
+import android.content.Context
+import android.content.Intent
+import android.content.SharedPreferences
+import android.net.Uri
 import android.os.Bundle
+import android.provider.OpenableColumns
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -33,23 +40,69 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+data class Game(val name: String, val uri: String)
+
 private val Bg = Color(0xFF121212)
 private val CardTop = Color(0xFF3A3F5C)
 private val CardBottom = Color(0xFF1B1D2B)
 private val Accent = Color(0xFF7C4DFF)
 
-private val games = listOf("Game 1", "Game 2", "Game 3", "Game 4", "Game 5", "Game 6")
+fun loadGames(prefs: SharedPreferences): List<Game> =
+    (prefs.getString("games", "") ?: "")
+        .lines()
+        .filter { it.contains("\t") }
+        .map { line ->
+            val p = line.split("\t")
+            Game(p[0], p[1])
+        }
+
+fun saveGames(prefs: SharedPreferences, games: List<Game>) {
+    val text = games.joinToString("\n") { "${it.name}\t${it.uri}" }
+    prefs.edit().putString("games", text).apply()
+}
+
+fun displayName(context: Context, uri: Uri): String {
+    context.contentResolver.query(uri, null, null, null, null)?.use { c ->
+        val i = c.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+        if (i >= 0 && c.moveToFirst()) return c.getString(i)
+    }
+    return "Game"
+}
 
 @Composable
 fun GameBoxApp() {
-    val tabs = listOf("Home", "Library", "Settings")
+    val context = LocalContext.current
+    val prefs = remember { context.getSharedPreferences("gamebox", Context.MODE_PRIVATE) }
+    var games by remember { mutableStateOf(loadGames(prefs)) }
+    var selected by remember { mutableStateOf<Game?>(null) }
     var tab by remember { mutableIntStateOf(0) }
-    var selected by remember { mutableStateOf<String?>(null) }
+    val tabs = listOf("Home", "Library", "Settings")
+
+    val picker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            try {
+                context.contentResolver.takePersistableUriPermission(
+                    uri, Intent.FLAG_GRANT_READ_URI_PERMISSION
+                )
+            } catch (e: Exception) {
+            }
+            val name = displayName(context, uri).substringBeforeLast('.')
+            games = games + Game(name, uri.toString())
+            saveGames(prefs, games)
+        }
+    }
 
     BackHandler(enabled = selected != null) { selected = null }
 
     MaterialTheme(
-        colorScheme = darkColorScheme(primary = Accent, onPrimary = Color.White, background = Bg, surface = Bg)
+        colorScheme = darkColorScheme(
+            primary = Accent,
+            onPrimary = Color.White,
+            background = Bg,
+            surface = Bg
+        )
     ) {
         Scaffold(
             containerColor = Bg,
@@ -69,9 +122,20 @@ fun GameBoxApp() {
             Box(Modifier.padding(padding).padding(horizontal = 16.dp)) {
                 val game = selected
                 when {
-                    game != null -> DetailScreen(game, onBack = { selected = null })
-                    tab == 0 -> HomeScreen { selected = it }
-                    tab == 1 -> LibraryScreen { selected = it }
+                    game != null -> DetailScreen(
+                        game,
+                        onBack = { selected = null },
+                        onRemove = {
+                            games = games - game
+                            saveGames(prefs, games)
+                            selected = null
+                        }
+                    )
+                    tab == 0 -> HomeScreen(games) { selected = it }
+                    tab == 1 -> LibraryScreen(
+                        games,
+                        onAdd = { picker.launch(arrayOf("*/*")) }
+                    ) { selected = it }
                     else -> SettingsScreen()
                 }
             }
@@ -91,34 +155,54 @@ fun ScreenTitle(text: String) {
 }
 
 @Composable
-fun HomeScreen(onOpen: (String) -> Unit) {
+fun EmptyHint() {
+    Text("No games yet. Open Library and tap Add game.", color = Color.Gray)
+}
+
+@Composable
+fun HomeScreen(games: List<Game>, onOpen: (Game) -> Unit) {
     Column {
         ScreenTitle("GAMEBOX")
-        LazyVerticalGrid(
-            columns = GridCells.Fixed(2),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            items(games) { name -> GameCard(name) { onOpen(name) } }
+        if (games.isEmpty()) {
+            EmptyHint()
+        } else {
+            LazyVerticalGrid(
+                columns = GridCells.Fixed(2),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                items(games) { game -> GameCard(game.name) { onOpen(game) } }
+            }
         }
     }
 }
 
 @Composable
-fun LibraryScreen(onOpen: (String) -> Unit) {
+fun LibraryScreen(games: List<Game>, onAdd: () -> Unit, onOpen: (Game) -> Unit) {
     Column {
         ScreenTitle("Library")
-        LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            items(games) { name ->
-                Box(
-                    Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(CardBottom)
-                        .clickable { onOpen(name) }
-                        .padding(20.dp)
-                ) {
-                    Text(name, color = Color.White, fontSize = 18.sp)
+        Button(
+            onClick = onAdd,
+            modifier = Modifier.fillMaxWidth().height(52.dp)
+        ) {
+            Text("+ Add game")
+        }
+        Spacer(Modifier.height(12.dp))
+        if (games.isEmpty()) {
+            EmptyHint()
+        } else {
+            LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(games) { game ->
+                    Box(
+                        Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(CardBottom)
+                            .clickable { onOpen(game) }
+                            .padding(20.dp)
+                    ) {
+                        Text(game.name, color = Color.White, fontSize = 18.sp)
+                    }
                 }
             }
         }
@@ -134,7 +218,7 @@ fun SettingsScreen() {
 }
 
 @Composable
-fun DetailScreen(name: String, onBack: () -> Unit) {
+fun DetailScreen(game: Game, onBack: () -> Unit, onRemove: () -> Unit) {
     val context = LocalContext.current
     Column(Modifier.fillMaxSize()) {
         TextButton(onClick = onBack) { Text("< Back") }
@@ -146,7 +230,7 @@ fun DetailScreen(name: String, onBack: () -> Unit) {
                 .background(Brush.verticalGradient(listOf(CardTop, CardBottom)))
         )
         Text(
-            name,
+            game.name,
             color = Color.White,
             fontSize = 28.sp,
             fontWeight = FontWeight.Bold,
@@ -154,11 +238,14 @@ fun DetailScreen(name: String, onBack: () -> Unit) {
         )
         Button(
             onClick = {
-                Toast.makeText(context, "Play: $name", Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, "Play: ${game.name}", Toast.LENGTH_SHORT).show()
             },
             modifier = Modifier.fillMaxWidth().height(56.dp)
         ) {
             Text("Play", fontSize = 18.sp)
+        }
+        TextButton(onClick = onRemove, modifier = Modifier.padding(top = 8.dp)) {
+            Text("Remove from library")
         }
     }
 }
