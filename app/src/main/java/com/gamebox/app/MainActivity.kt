@@ -49,7 +49,7 @@ fun GameBoxApp() {
     BackHandler(enabled = selected != null) { selected = null }
 
     MaterialTheme(
-        colorScheme = darkColorScheme(primary = Accent, background = Bg, surface = Bg)
+        colorScheme = darkColorScheme(primary = Accent, onPrimary = Color.White, background = Bg, surface = Bg)
     ) {
         Scaffold(
             containerColor = Bg,
