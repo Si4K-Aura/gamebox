@@ -162,7 +162,7 @@ fun EmptyHint() {
 @Composable
 fun HomeScreen(games: List<Game>, onOpen: (Game) -> Unit) {
     Column {
-        ScreenTitle("GAMEBOX")
+        ScreenTitle("LAUNCHER")
         if (games.isEmpty()) {
             EmptyHint()
         } else {
